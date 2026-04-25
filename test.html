@@ -1,0 +1,728 @@
+<html lang="en">
+<head>
+    <title>rexi test suite</title>
+    <script>
+        let tests = [];
+        let currentTest = null;
+        let passed = 0;
+        let failed = 0;
+        let find = (selector) => currentTest.testElt.querySelector(selector);
+        let realFetch = window.fetch;
+        function mockFetch(handler) {
+            window.fetch = handler;
+            return () => { window.fetch = realFetch };
+        }
+        function jsonResponse(data, init = {}) {
+            return new Response(JSON.stringify(data), {
+                status: init.status || 200,
+                headers: {"Content-Type": "application/json", ...(init.headers || {})}
+            });
+        }
+        function test(code){
+            let currentScript = document.currentScript;
+            let testElt = currentScript.closest('div');
+            tests.push(async ()=>{
+                currentTest.testElt = testElt;
+                try {
+                    await code();
+                    testElt.classList.add("passed");
+                    testElt.insertAdjacentHTML('beforeend', `<p>Passed</p>`)
+                    passed++;
+                    document.querySelector(".passed-info").querySelector("output").innerText = passed.toString();
+                } catch (e) {
+                    testElt.classList.add("failed");
+                    testElt.insertAdjacentHTML('beforeend', `<p>ERROR: ${e}</p>`)
+                    failed++;
+                    document.querySelector(".failed-info").querySelector("output").innerText = failed.toString();
+                } finally {
+                    currentTest = null;
+                    window.fetch = realFetch;
+                }
+            })
+        }
+        function sleep(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+        }
+        function assertEq(actual, expected, trim) {
+            if (expected !== (trim ? actual?.trim() : actual)) {
+                console.error("Expected", expected, "found", actual);
+                throw `Expected ${expected} found ${actual}`
+            }
+        }
+        document.addEventListener('DOMContentLoaded', async () => {
+            for (let i = 0; i < document.querySelectorAll(".test").length; i++){
+                const testBlock = document.querySelectorAll(".test")[i];
+                testBlock.querySelector("h3").insertAdjacentHTML("beforeend", ` - <a id='test${i}' href="test.html?test${i}">run</a>`)
+                let scriptElt = testBlock.querySelector("script");
+                scriptElt.insertAdjacentHTML("beforebegin", `<b>Code:</b><pre></pre>`)
+                scriptElt.previousElementSibling.innerText = scriptElt.innerText.replaceAll(/^ {8}/gm, '') + "\n";
+                if (location.search.indexOf("?test") === 0) {
+                  let index = parseInt(location.search.substring(5));
+                  if (index !== i) {
+                    testBlock.setAttribute("fx-ignore", 'true');
+                  } else {
+                    testBlock.scrollIntoView()
+                  }
+                }
+            }
+            setTimeout(async ()=>{
+              for (let i = 0; i < tests.length; i++){
+                if (location.search.indexOf("?test") === 0) {
+                  let index = parseInt(location.search.substring(5));
+                  if (index !== i) continue;
+                }
+                currentTest = tests[i];
+                await currentTest();
+              }
+            })
+        });
+    </script>
+    <script src="rexi.js"></script>
+    <style>
+        .test { padding: 8px; margin: 8px; }
+        .passed { border: 3px solid green; }
+        .failed { border: 3px solid red; }
+        .passed-info { color: green; }
+        .failed-info { color: red; }
+        pre { padding: 4px; margin: 12px; border: 1px solid rgb(128, 128, 128); background-color: whitesmoke; }
+        body.hide-passed .passed { display: none; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>&#x1F415; rexi test suite</h1>
+    <div>
+        <div class="passed-info">Passed: <output></output></div>
+        <div class="failed-info">Failed: <output></output></div>
+        <a href="javascript:document.body.classList.toggle('hide-passed')">Toggle Passed</a><br/>
+        <a href="test.html">Run All</a>
+    </div>
+</header>
+
+<main>
+
+    <section id="verbs">
+        <h2>Verb helpers</h2>
+
+        <div class="test">
+            <h3>get(url).raw() returns the raw Response</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("hello"));
+                    let res = await get("/t").raw();
+                    assertEq(res.status, 200);
+                    assertEq(await res.text(), "hello");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get(url).json() parses JSON body</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => jsonResponse({name: "Ada"}));
+                    let user = await get("/api/me").json();
+                    assertEq(user.name, "Ada");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get(url).text() returns text body</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("plain text"));
+                    assertEq(await get("/t").text(), "plain text");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get(url).html() returns a DocumentFragment parsed via &lt;template&gt;</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("<tr><td>row</td></tr>"));
+                    let frag = await get("/t").html();
+                    if (!(frag instanceof DocumentFragment)) throw "expected DocumentFragment";
+                    let tr = frag.querySelector("tr");
+                    if (!tr) throw "expected <tr> inside fragment";
+                    assertEq(tr.firstElementChild.tagName, "TD");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, object) sends JSON with Content-Type application/json</h3>
+            <script>
+                test(async () => {
+                    let seenMethod, seenCT, seenBody;
+                    mockFetch(async (url, init) => {
+                        seenMethod = init.method;
+                        seenCT = init.headers["Content-Type"];
+                        seenBody = init.body;
+                        return jsonResponse({ok: true});
+                    });
+                    let res = await post("/api/x", {name: "Ada"}).json();
+                    assertEq(seenMethod, "POST");
+                    assertEq(seenCT, "application/json");
+                    assertEq(seenBody, '{"name":"Ada"}');
+                    assertEq(res.ok, true);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>put / patch / del use the right HTTP methods</h3>
+            <script>
+                test(async () => {
+                    let methods = [];
+                    mockFetch(async (url, init) => { methods.push(init.method); return new Response("") });
+                    await put("/x", {a: 1}).raw();
+                    await patch("/x", {a: 1}).raw();
+                    await del("/x").raw();
+                    assertEq(methods.join(","), "PUT,PATCH,DELETE");
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="bodies">
+        <h2>Body normalization</h2>
+
+        <div class="test">
+            <h3>post(url, HTMLFormElement) sends FormData with form fields</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    await post("/login", find('form')).raw();
+                    if (!(seen instanceof FormData)) throw "expected FormData body";
+                    assertEq(seen.get("user"), "ada");
+                    assertEq(seen.get("pw"), "secret");
+                })
+            </script>
+            <form>
+                <input name="user" value="ada">
+                <input name="pw" value="secret">
+            </form>
+        </div>
+
+        <div class="test">
+            <h3>post(url, singleInputElement) sends FormData with a single entry</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    await post("/one", find('input')).raw();
+                    if (!(seen instanceof FormData)) throw "expected FormData body";
+                    assertEq(seen.get("only"), "value");
+                })
+            </script>
+            <input name="only" value="value">
+        </div>
+
+        <div class="test">
+            <h3>post(url, iterableOfElements) collects each element's name/value</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let inputs = currentTest.testElt.querySelectorAll("input[name]");
+                    await post("/many", inputs).raw();
+                    if (!(seen instanceof FormData)) throw "expected FormData body";
+                    assertEq(seen.get("a"), "1");
+                    assertEq(seen.get("b"), "2");
+                    assertEq(seen.get("c"), "3");
+                })
+            </script>
+            <input name="a" value="1">
+            <input name="b" value="2">
+            <input name="c" value="3">
+        </div>
+
+        <div class="test">
+            <h3>post(url, FormData) passes the FormData through unchanged</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let fd = new FormData();
+                    fd.append("x", "y");
+                    await post("/fd", fd).raw();
+                    assertEq(seen, fd);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, null) sends no body</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    await post("/empty").raw();
+                    assertEq(seen, undefined);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, string) sends the string as the raw body</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    await post("/raw", "hello world").raw();
+                    assertEq(seen, "hello world");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, Blob) sends the blob as the raw body</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let blob = new Blob(["abc"], {type: "text/plain"});
+                    await post("/blob", blob).raw();
+                    assertEq(seen, blob);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, URLSearchParams) sends it as the raw body (urlencoded form)</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let p = new URLSearchParams({a: "1", b: "2"});
+                    await post("/up", p).raw();
+                    assertEq(seen, p);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>post(url, fileInput) appends File objects, not filename strings</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let input = find('input[type=file]');
+                    let dt = new DataTransfer();
+                    dt.items.add(new File(["data"], "hello.txt", {type: "text/plain"}));
+                    input.files = dt.files;
+                    await post("/up", input).raw();
+                    if (!(seen instanceof FormData)) throw "expected FormData body";
+                    let f = seen.get("doc");
+                    if (!(f instanceof File)) throw `expected File, got ${typeof f}`;
+                    assertEq(f.name, "hello.txt");
+                })
+            </script>
+            <input type="file" name="doc">
+        </div>
+
+        <div class="test">
+            <h3>post(url, checkbox) only includes checked ones</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let boxes = currentTest.testElt.querySelectorAll("input[type=checkbox]");
+                    await post("/cb", boxes).raw();
+                    assertEq(seen.getAll("opt").join(","), "a,c");
+                })
+            </script>
+            <input type="checkbox" name="opt" value="a" checked>
+            <input type="checkbox" name="opt" value="b">
+            <input type="checkbox" name="opt" value="c" checked>
+        </div>
+
+        <div class="test">
+            <h3>post(url, selectMultiple) includes every selected option</h3>
+            <script>
+                test(async () => {
+                    let seen;
+                    mockFetch(async (url, init) => { seen = init.body; return new Response(""); });
+                    let sel = find('select');
+                    await post("/sel", sel).raw();
+                    assertEq(seen.getAll("pick").join(","), "x,z");
+                })
+            </script>
+            <select name="pick" multiple>
+                <option value="x" selected>X</option>
+                <option value="y">Y</option>
+                <option value="z" selected>Z</option>
+            </select>
+        </div>
+    </section>
+
+    <section id="raw-query">
+        <h2>Raw body in query mode</h2>
+
+        <div class="test">
+            <h3>get(url, string) parses the string as pre-encoded query params</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/q", "a=1&b=two").raw();
+                    assertEq(seenUrl, "/q?a=1&b=two");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get(url, URLSearchParams) serializes via the URLSearchParams</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/q", new URLSearchParams({a: "1", b: "2"})).raw();
+                    assertEq(seenUrl, "/q?a=1&b=2");
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="query">
+        <h2>Query-string encoding (GET / HEAD / DEL)</h2>
+
+        <div class="test">
+            <h3>get(url, {a: 1, b: "x"}) URL-encodes as query string</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/search", {a: 1, b: "x"}).raw();
+                    assertEq(seenUrl, "/search?a=1&b=x");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get(url, {tag: [1,2,3]}) repeats the key for array values</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/search", {tag: [1, 2, 3]}).raw();
+                    assertEq(seenUrl, "/search?tag=1&tag=2&tag=3");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>get preserves existing query params in the URL</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/search?base=1", {extra: "x"}).raw();
+                    assertEq(seenUrl, "/search?base=1&extra=x");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>del(url, body) URL-encodes body by default</h3>
+            <script>
+                test(async () => {
+                    let seenUrl, seenBody;
+                    mockFetch(async (url, init) => { seenUrl = url; seenBody = init.body; return new Response(""); });
+                    await del("/items", {id: 42}).raw();
+                    assertEq(seenUrl, "/items?id=42");
+                    assertEq(seenBody, undefined);
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="include">
+        <h2>opts.include</h2>
+
+        <div class="test">
+            <h3>include: selector merges extra form fields</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/s", {q: "hi"}, {include: "#tok"}).raw();
+                    // order: body entries first, then included
+                    assertEq(seenUrl, "/s?q=hi&csrf=abc123");
+                })
+            </script>
+            <input id="tok" name="csrf" value="abc123">
+        </div>
+
+        <div class="test">
+            <h3>include: array of selectors merges all</h3>
+            <script>
+                test(async () => {
+                    let seenUrl;
+                    mockFetch(async (url, init) => { seenUrl = url; return new Response(""); });
+                    await get("/s", null, {include: ["#a", "#b"]}).raw();
+                    assertEq(seenUrl, "/s?a=1&b=2");
+                })
+            </script>
+            <input id="a" name="a" value="1">
+            <input id="b" name="b" value="2">
+        </div>
+
+        <div class="test">
+            <h3>include: with a JSON body promotes the request to form mode</h3>
+            <script>
+                test(async () => {
+                    let seenBody, seenCT;
+                    mockFetch(async (url, init) => {
+                        seenBody = init.body;
+                        seenCT = init.headers["Content-Type"];
+                        return new Response("");
+                    });
+                    await post("/save", {name: "Ada"}, {include: "#tok2"}).raw();
+                    if (!(seenBody instanceof FormData)) throw "expected FormData body";
+                    assertEq(seenBody.get("name"), "Ada");
+                    assertEq(seenBody.get("csrf"), "xyz");
+                    if (seenCT === "application/json") throw "should not have JSON Content-Type";
+                })
+            </script>
+            <input id="tok2" name="csrf" value="xyz">
+        </div>
+    </section>
+
+    <section id="send">
+        <h2>opts.send override</h2>
+
+        <div class="test">
+            <h3>send: "body" forces DELETE to send as body</h3>
+            <script>
+                test(async () => {
+                    let seenUrl, seenBody;
+                    mockFetch(async (url, init) => { seenUrl = url; seenBody = init.body; return new Response(""); });
+                    await del("/items", {id: 42}, {send: "body"}).raw();
+                    assertEq(seenUrl, "/items");
+                    assertEq(seenBody, '{"id":42}');
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>send: "query" forces POST to URL-encode</h3>
+            <script>
+                test(async () => {
+                    let seenUrl, seenBody;
+                    mockFetch(async (url, init) => { seenUrl = url; seenBody = init.body; return new Response(""); });
+                    await post("/search", {q: "hi"}, {send: "query"}).raw();
+                    assertEq(seenUrl, "/search?q=hi");
+                    assertEq(seenBody, undefined);
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="errors">
+        <h2>Error handling</h2>
+
+        <div class="test">
+            <h3>Non-2xx throws Error with .status and .response</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("nope", {status: 404}));
+                    let caught = null;
+                    try { await get("/missing").text() } catch (e) { caught = e }
+                    if (!caught) throw "expected throw on 404";
+                    assertEq(caught.status, 404);
+                    assertEq(caught.response?.status, 404);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>Thrown error.response.text() gives the error body</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("nope", {status: 500}));
+                    let caught = null;
+                    try { await get("/boom").text() } catch (e) { caught = e }
+                    assertEq(await caught.response.text(), "nope");
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="abort">
+        <h2>Abort and timeout</h2>
+
+        <div class="test">
+            <h3>.abort() cancels an in-flight request with AbortError</h3>
+            <script>
+                test(async () => {
+                    mockFetch((url, init) => new Promise((resolve, reject) => {
+                        init.signal.addEventListener("abort", () => {
+                            reject(new DOMException("aborted", "AbortError"));
+                        });
+                    }));
+                    let p = get("/slow");
+                    setTimeout(p.abort, 10);
+                    let caught = null;
+                    try { await p } catch (e) { caught = e }
+                    assertEq(caught?.name, "AbortError");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>{timeout: N} aborts after N ms with AbortError</h3>
+            <script>
+                test(async () => {
+                    mockFetch((url, init) => new Promise((_, reject) => {
+                        init.signal.addEventListener("abort", () => {
+                            reject(new DOMException("aborted", "AbortError"));
+                        });
+                    }));
+                    let caught = null;
+                    try { await get("/slow", null, {timeout: 10}) } catch (e) { caught = e }
+                    assertEq(caught?.name, "AbortError");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>external opts.signal.abort() also cancels the request</h3>
+            <script>
+                test(async () => {
+                    mockFetch((url, init) => new Promise((_, reject) => {
+                        init.signal.addEventListener("abort", () => {
+                            reject(new DOMException("aborted", "AbortError"));
+                        });
+                    }));
+                    let ext = new AbortController();
+                    let p = get("/slow", null, {signal: ext.signal});
+                    setTimeout(() => ext.abort(), 10);
+                    let caught = null;
+                    try { await p } catch (e) { caught = e }
+                    assertEq(caught?.name, "AbortError");
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="events">
+        <h2>Lifecycle events</h2>
+
+        <div class="test">
+            <h3>rexi:before fires with detail.cfg = {url, init}</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response(""));
+                    let seen = null;
+                    let h = (e) => { seen = e.detail.cfg };
+                    document.addEventListener("rexi:before", h);
+                    try { await get("/evt").raw() }
+                    finally { document.removeEventListener("rexi:before", h) }
+                    if (!seen) throw "rexi:before did not fire";
+                    assertEq(seen.url, "/evt");
+                    assertEq(seen.init.method, "GET");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>rexi:before can mutate init (e.g. inject Authorization header)</h3>
+            <script>
+                test(async () => {
+                    let seenAuth;
+                    mockFetch(async (url, init) => { seenAuth = init.headers.Authorization; return new Response("") });
+                    let h = (e) => { e.detail.cfg.init.headers.Authorization = "Bearer abc" };
+                    document.addEventListener("rexi:before", h);
+                    try { await get("/evt").raw() }
+                    finally { document.removeEventListener("rexi:before", h) }
+                    assertEq(seenAuth, "Bearer abc");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>rexi:before preventDefault() cancels the request with AbortError</h3>
+            <script>
+                test(async () => {
+                    let fetched = false;
+                    mockFetch(async () => { fetched = true; return new Response("") });
+                    let h = (e) => e.preventDefault();
+                    document.addEventListener("rexi:before", h);
+                    let caught = null;
+                    try { await get("/noop").raw() } catch (e) { caught = e }
+                    document.removeEventListener("rexi:before", h);
+                    assertEq(caught?.name, "AbortError");
+                    assertEq(fetched, false);
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>rexi:after fires with detail.response on success</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("body!", {status: 201}));
+                    let seen = null;
+                    let h = (e) => { seen = e.detail };
+                    document.addEventListener("rexi:after", h);
+                    try { await get("/evt").raw() }
+                    finally { document.removeEventListener("rexi:after", h) }
+                    assertEq(seen?.response?.status, 201);
+                    assertEq(seen?.cfg?.url, "/evt");
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>rexi:after fires even on non-2xx (then rexi still throws)</h3>
+            <script>
+                test(async () => {
+                    mockFetch(async () => new Response("nope", {status: 404}));
+                    let seen = null;
+                    let h = (e) => { seen = e.detail.response.status };
+                    document.addEventListener("rexi:after", h);
+                    let caught = null;
+                    try { await get("/nope").raw() } catch (e) { caught = e }
+                    document.removeEventListener("rexi:after", h);
+                    assertEq(seen, 404);
+                    assertEq(caught?.status, 404);
+                })
+            </script>
+        </div>
+    </section>
+
+    <section id="globals">
+        <h2>Globals and namespace</h2>
+
+        <div class="test">
+            <h3>rexi namespace exposes the six verbs (del, not delete)</h3>
+            <script>
+                test(async () => {
+                    for (let n of ["get", "head", "post", "put", "patch", "del"]) {
+                        if (typeof rexi[n] !== "function") throw `rexi.${n} is not a function`;
+                    }
+                })
+            </script>
+        </div>
+
+        <div class="test">
+            <h3>Globals get/head/post/put/patch/del attached to window</h3>
+            <script>
+                test(async () => {
+                    for (let n of ["get", "head", "post", "put", "patch", "del"]) {
+                        if (typeof window[n] !== "function") throw `window.${n} is not a function`;
+                    }
+                })
+            </script>
+        </div>
+    </section>
+
+</main>
+
+</body>
+</html>
