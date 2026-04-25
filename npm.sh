@@ -9,12 +9,12 @@ fi
 
 VERSION="$1"
 
-echo "Releasing rexi-js v${VERSION}..."
+echo "Releasing @bigskysoftware/rexi-js v${VERSION}..."
 
 # Generate package.json
 cat > package.json <<EOF
 {
-  "name": "rexi-js",
+  "name": "@bigskysoftware/rexi-js",
   "version": "${VERSION}",
   "description": "rexi.js - A Fluent Little Fetch Wrapper for fixi.js",
   "main": "rexi.js",
@@ -50,4 +50,4 @@ npm publish --access public
 # Clean up
 rm package.json
 
-echo "Published rexi-js@${VERSION} to npm"
+echo "Published @bigskysoftware/rexi-js@${VERSION} to npm"
