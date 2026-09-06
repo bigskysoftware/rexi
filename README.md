@@ -42,7 +42,7 @@ Drop `rexi.js` into a script tag:
 Or install via npm:
 
 ```
-npm install rexi-js
+npm install @bigskysoftware/rexi-js
 ```
 
 ## API
